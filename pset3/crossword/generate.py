@@ -3,16 +3,14 @@ import sys
 from crossword import *
 
 
-class CrosswordCreator():
-
+class CrosswordCreator:
     def __init__(self, crossword):
         """
         Create new CSP crossword generate.
         """
         self.crossword = crossword
         self.domains = {
-            var: self.crossword.words.copy()
-            for var in self.crossword.variables
+            var: self.crossword.words.copy() for var in self.crossword.variables
         }
 
     def letter_grid(self, assignment):
@@ -49,6 +47,7 @@ class CrosswordCreator():
         Save crossword assignment to an image file.
         """
         from PIL import Image, ImageDraw, ImageFont
+
         cell_size = 100
         cell_border = 2
         interior_size = cell_size - 2 * cell_border
@@ -57,9 +56,8 @@ class CrosswordCreator():
         # Create a blank canvas
         img = Image.new(
             "RGBA",
-            (self.crossword.width * cell_size,
-             self.crossword.height * cell_size),
-            "black"
+            (self.crossword.width * cell_size, self.crossword.height * cell_size),
+            "black",
         )
         font = ImageFont.truetype("assets/fonts/OpenSans-Regular.ttf", 80)
         draw = ImageDraw.Draw(img)
@@ -68,19 +66,24 @@ class CrosswordCreator():
             for j in range(self.crossword.width):
 
                 rect = [
-                    (j * cell_size + cell_border,
-                     i * cell_size + cell_border),
-                    ((j + 1) * cell_size - cell_border,
-                     (i + 1) * cell_size - cell_border)
+                    (j * cell_size + cell_border, i * cell_size + cell_border),
+                    (
+                        (j + 1) * cell_size - cell_border,
+                        (i + 1) * cell_size - cell_border,
+                    ),
                 ]
                 if self.crossword.structure[i][j]:
                     draw.rectangle(rect, fill="white")
                     if letters[i][j]:
                         w, h = draw.textsize(letters[i][j], font=font)
                         draw.text(
-                            (rect[0][0] + ((interior_size - w) / 2),
-                             rect[0][1] + ((interior_size - h) / 2) - 10),
-                            letters[i][j], fill="black", font=font
+                            (
+                                rect[0][0] + ((interior_size - w) / 2),
+                                rect[0][1] + ((interior_size - h) / 2) - 10,
+                            ),
+                            letters[i][j],
+                            fill="black",
+                            font=font,
                         )
 
         img.save(filename)
@@ -99,9 +102,9 @@ class CrosswordCreator():
         (Remove any values that are inconsistent with a variable's unary
          constraints; in this case, the length of the word.)
         """
-        def rem(x): self.domains[v].remove(x) if len(x) != v.length else 0
-        for v in self.crossword.variables:
-            map(rem, self.domains[v])
+        for var in self.crossword.variables:
+            for word in self.crossword.words:
+                self.domains[var].remove(word) if len(word) != var.length else 0
         return 0
 
     def revise(self, x, y):
@@ -114,11 +117,21 @@ class CrosswordCreator():
         False if no revision was made.
         """
         revision = False
-        overlap = self.crossword.overlaps[x, y]
-        def rem(x): self.domains[v].remove(x) if len(x) != v.length else 0
+        nodes = self.crossword.overlaps[x, y]
+        if not (nodes):
+            return False
+        node1, node2 = nodes
 
+        for var in self.domains[x]:
+            revision = (
+                (True, self.domains[x].remove(v))
+                if not any(
+                    var2 for var2 in self.domains[y] if var[node1] == var2[node2]
+                )
+                else revision
+            )
 
-        raise NotImplementedError
+        return revision
 
     def ac3(self, arcs=None):
         """
@@ -129,21 +142,55 @@ class CrosswordCreator():
         Return True if arc consistency is enforced and no domains are empty;
         return False if one or more domains end up empty.
         """
-        raise NotImplementedError
+
+        if arcs:
+            arcs = list(arcs)
+        else:
+            arcs = []
+            (
+                (arcs.append((var, var2)) for var2 in self.crossword.neighbors(var))
+                for var in self.crossword.variables
+            )
+
+        while arcs:
+            var, var2 = arcs.pop()
+            if self.revise(var, var2):
+                if not (self.domains[var]):
+                    return False
+            (arcs.append((x, var)) for x in self.crossword.neighbors(var) - {var2})
+
+        return True
 
     def assignment_complete(self, assignment):
         """
         Return True if `assignment` is complete (i.e., assigns a value to each
         crossword variable); return False otherwise.
         """
-        raise NotImplementedError
+        for v in self.crossword.variables:
+            if v not in assignment.keys() or assignment[v] not in self.crossword.words:
+                return False
+        return True
 
     def consistent(self, assignment):
         """
         Return True if `assignment` is consistent (i.e., words fit in crossword
         puzzle without conflicting characters); return False otherwise.
         """
-        raise NotImplementedError
+        ass = assignment
+        for v in assignment:
+            if v.length != len(ass[v]):
+                return False
+
+            for w in assignment:
+                if v != w:
+                    if ass[v] == ass[w]:
+                        return False
+                    nodes = self.crossword.overlaps[v, w]
+                    if nodes:
+                        node1, node2 = nodes
+                        if ass[v][node1] != ass[w][node2]:
+                            return False
+        return True
 
     def order_domain_values(self, var, assignment):
         """
@@ -152,7 +199,20 @@ class CrosswordCreator():
         The first value in the list, for example, should be the one
         that rules out the fewest values among the neighbors of `var`.
         """
-        raise NotImplementedError
+        neighbor_list = self.crossword.neighbors(var)
+        (neighbor_list.remove(v) for v in assignment if v in neighbor_list)
+
+        result = []
+        for v1 in self.domains[var]:
+            outruled = 0
+            for neighbor in neighbor_list:
+                for v2 in self.domains[neighbor]:
+                    node1, node2 = self.crossword.overlaps[var, neighbor]
+                    outruled += (
+                        1 if node1 and node2 and v1[node1] != v2[node2] else outruled
+                    )
+            result.append([v1, outruled])
+        return [i[0] for i in sorted(result, key=lambda x: x[1])]
 
     def select_unassigned_variable(self, assignment):
         """
@@ -162,7 +222,14 @@ class CrosswordCreator():
         degree. If there is a tie, any of the tied variables are acceptable
         return values.
         """
-        raise NotImplementedError
+        variables = [
+            [var, len(self.domains[var]), len(self.crossword.neighbors(var))]
+            for var in self.crossword.variables
+            if var not in assignment
+        ]
+        if variables:
+            return sorted(variables, key=lambda x: (x[1], -x[2]))[0][0]
+        return None
 
     def backtrack(self, assignment):
         """
@@ -173,7 +240,17 @@ class CrosswordCreator():
 
         If no assignment is possible, return None.
         """
-        raise NotImplementedError
+        if self.assignment_complete(assignment):
+            return assignment
+        v = self.select_unassigned_variable(assignment)
+        for val in self.order_domain_values(v, assignment):
+            temp_assignment = assignment.copy()
+            temp_assignment[v] = val
+            if self.consistent(temp_assignment):
+                result = self.backtrack(temp_assignment)
+                if result:
+                    return result
+        return None
 
 
 def main():
